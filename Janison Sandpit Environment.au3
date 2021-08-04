@@ -3,8 +3,6 @@
 #EndRegion ;**** Directives created by AutoIt3Wrapper_GUI ****
 ;#RequireAdmin
 ;#AutoIt3Wrapper_usex64=n
-#include <SQLite.au3>
-#include <SQLite.dll.au3>
 #include <Toast.au3>
 #include <Octopus.au3>
 #include <Confluence.au3>
@@ -15,6 +13,7 @@ Local $app_name = "Janison Sandpit Environment"
 ; Authentication
 
 Local $ini_filename = @ScriptDir & "\" & $app_name & ".ini"
+Global $azure_authenticated = False
 _ConfluenceAuthenticationWithToast($app_name, "https://janisoncls.atlassian.net", $ini_filename)
 _ConfluenceAuthenticationWithToast($app_name, "https://janisoncls.atlassian.net", $ini_filename)
 _OctopusDomainSet("https://octopus.janison.com.au")
@@ -58,7 +57,75 @@ for $deployment_num = 0 to (UBound($deployment) - 1)
 Next
 
 $storage_format = $storage_format &	"</tbody></table>" & @CRLF
+#cs
+; Azure Scaling Information
 
+$storage_format = $storage_format &	'<table data-layout=\"wide\"><colgroup><col style=\"width:160px;\"/><col style=\"width:240px;\"/><col style=\"width:150px;\"/><col style=\"width:200px;\"/><col style=\"width:50px;\"/></colgroup><tbody><tr><th>Azure Subscription</th><th>Resource Grp</th><th>DB Server</th><th>DB Name</th><th>Scale</th></tr>' & @CRLF
+_Toast_Show(0, $app_name, "Getting Azure Scaling Data", -300, False, True)
+
+; Authenticate to Azure if required...
+
+AzureAuth()
+
+; Query Azure subscriptions
+
+Local $ps_script_arr[2]
+local $ps_script_arr2[1]
+Local $name_width = 9999
+;$ps_script_arr2[0] = "Get-AzureRmSubscription"
+;$str = _Run_PSHost_Script($ps_script_arr2)
+;Local $subscription_arr = StringSplit($str, @CRLF, 3)
+;Local $name_width = StringInStr($subscription_arr[1], " Id ", 1) - 1
+;_ArrayDelete($subscription_arr, 0)
+;_ArrayDelete($subscription_arr, 0)
+;_ArrayDelete($subscription_arr, 0)
+
+; most of the subscriptions in the list above do not have a SIT DB
+;	to save runtime we disable above and instead focus on a hardcoded list of subscriptions that do have a SIT DB below ...
+
+Local $subscription_arr[1]
+$subscription_arr[0] = "AssessmentDevTest"
+
+for $subscription_num = 0 to (UBound($subscription_arr) - 1)
+
+	Local $subscription_name = StringStripWS(StringLeft($subscription_arr[$subscription_num], $name_width), 3)
+
+	if StringLen($subscription_name) < 1 Then ExitLoop
+
+	; Query Azure ...
+
+	$ps_script_arr[0] = "Select-AzureRmSubscription -Subscription '" & $subscription_name & "'"
+	$ps_script_arr[1] = "Get-AzureRmResource -ResourceType 'Microsoft.Sql/servers' -ResourceGroupName '*-SIT'"
+	$str = _Run_PSHost_Script($ps_script_arr)
+
+	if StringLen($str) > 0 Then
+
+		Local $server_name_arr = StringRegExp($str, "(?m)^Name *: (.*)$", 3)
+
+		If @error = 0 Then
+
+			Local $resource_group_name_database_name_arr = StringRegExp($str, "(?m)^ResourceGroupName *: (.*)$", 3)
+
+			for $server_num = 0 to (UBound($server_name_arr) - 1)
+
+				$ps_script_arr2[0] = "Get-AzureRmSqlDatabase -ResourceGroupName '" & $resource_group_name_database_name_arr[$server_num] & "' -ServerName '" & $server_name_arr[$server_num] & "' -DatabaseName '" & $resource_group_name_database_name_arr[$server_num] & "'"
+				$str = _Run_PSHost_Script($ps_script_arr2)
+				Local $scale = "?"
+
+				if StringLen($str) > 0 Then
+
+					$sql_db_arr = StringRegExp($str, "(?m)CurrentServiceObjectiveName *: (.*)$", 1)
+					$scale = $sql_db_arr[0]
+				EndIf
+
+				$storage_format = $storage_format & "<tr><td>" & $subscription_name & "</td><td>" & $resource_group_name_database_name_arr[$server_num] & "</td><td>" & $server_name_arr[$server_num] & "</td><td>" & $resource_group_name_database_name_arr[$server_num] & "</td><td>" & $scale & "</td></tr>" & @CRLF
+			Next
+		EndIf
+	EndIf
+Next
+
+$storage_format = $storage_format &	"</tbody></table>" & @CRLF
+#ce
 ; Update Confluence
 
 _Toast_Show(0, $app_name, "Uploading reports to confluence", -300, False, True)
